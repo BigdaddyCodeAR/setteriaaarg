@@ -1,0 +1,16 @@
+{
+  "name": "setter-ia-manychat",
+  "version": "1.0.0",
+  "description": "Setter con IA (Claude) conectado a Manychat vía webhook",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5",
+    "@supabase/supabase-js": "^2.45.4"
+  }
+}
