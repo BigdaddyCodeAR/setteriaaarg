@@ -19,6 +19,8 @@ const ANTHROPIC_MODEL = "claude-sonnet-5";
 // Ignora las políticas de seguridad (RLS) — por eso es el único que puede escribir.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 // -------------------- Llamada a Claude --------------------
 function parseReply(raw) {
   const m = raw.match(/<eval>([\s\S]*?)<\/eval>/);
@@ -92,6 +94,10 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
 
     const history = [...(previos || []), { role: "user", content: userText }];
 
+    // espera antes de contestar (no responde apenas le escriben, como una
+    // persona real que ve el mensaje y tarda un poco en leer/escribir).
+    await sleep(5000 + Math.floor(Math.random() * 5000)); // 5 a 10 segundos
+
     const raw = await askClaude(profesional.system_prompt, history);
     const { messages, ev } = parseReply(raw);
 
@@ -107,9 +113,17 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       updated_at: new Date().toISOString(),
     }).eq("id", conv.id);
 
+    // delay entre mensajes para que no lleguen todos pegados: ~5s fijos,
+    // con una pequeña variación al azar para que no se sienta mecánico.
     return res.json({
       version: "v2",
-      content: { messages: messages.map(text => ({ type: "text", text })) },
+      content: {
+        messages: messages.map(text => ({
+          type: "text",
+          text,
+          delay: 5 + Math.floor(Math.random() * 3), // 5, 6 o 7 segundos
+        })),
+      },
       set_fields: {
         ai_etapa: ev.etapa, ai_status: ev.status, ai_score: ev.score,
         ai_mostrar_resultados: ev.mostrar_resultados,
@@ -245,6 +259,17 @@ function addBubble(role, text){
   $('msgs').scrollTop = $('msgs').scrollHeight;
 }
 
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+function showTyping(){
+  const row = document.createElement('div');
+  row.className = 'row ai'; row.id = 'typingRow';
+  row.innerHTML = '<div class="bubble" style="opacity:.6;">escribiendo…</div>';
+  $('msgs').appendChild(row);
+  $('msgs').scrollTop = $('msgs').scrollHeight;
+}
+function hideTyping(){ const r = document.getElementById('typingRow'); if (r) r.remove(); }
+
 async function send(){
   const text = $('msg').value.trim();
   if (!text) return;
@@ -263,7 +288,13 @@ async function send(){
       throw new Error('El servidor no devolvió JSON (status ' + res.status + '): ' + raw.slice(0, 300));
     }
     if (!res.ok) throw new Error(data.error || data.detail || ('HTTP ' + res.status));
-    (data.content?.messages || []).forEach(m => addBubble('ai', m.text));
+    // muestra cada mensaje con una espera (mínimo 5s) para simular que lo tipea, no todo pegado
+    for (const m of (data.content?.messages || [])) {
+      showTyping();
+      await sleep((m.delay || 5) * 1000);
+      hideTyping();
+      addBubble('ai', m.text);
+    }
   }catch(e){
     const err = document.createElement('div'); err.className = 'err';
     err.textContent = 'Error: ' + e.message;
