@@ -38,23 +38,40 @@
   .badge.status-meet_agendado{background:rgba(76,154,106,.3); color:var(--good);}
   .badge.status-descartado{background:rgba(166,68,58,.18); color:var(--bad);}
   .badge.status-conversando{background:rgba(169,154,110,.18); color:var(--sub);}
-  main{flex:1; display:flex; flex-direction:column; min-width:0;}
-  .topbar{padding:16px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;}
-  .topbar h3{font-family:'Fraunces',serif; margin:0; font-size:1.05rem; color:var(--ink);}
-  .brand{font-family:'Fraunces',serif; font-weight:700; font-size:1.15rem; letter-spacing:.04em; color:var(--accent);}
-  .resumenBtn{width:auto; padding:8px 14px; font-size:.82rem;}
-  #resumenBox{margin:14px 24px 0; padding:14px; background:var(--panel2); border:1px solid var(--line); border-radius:10px; font-size:.85rem; white-space:pre-wrap; display:none;}
-  .stats{display:none; gap:10px; margin:14px 24px 0; flex-wrap:wrap;}
+  main{flex:1; display:flex; flex-direction:column; min-width:0; background:
+    radial-gradient(circle at 100% 0%, rgba(212,175,55,.05), transparent 45%) var(--bg);}
+  .topbar{padding:18px 28px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;
+    background:var(--panel); box-shadow:0 2px 10px rgba(0,0,0,.25); z-index:2; position:relative;}
+  .topbar h3{font-family:'Fraunces',serif; margin:0; font-size:1.1rem; color:var(--ink);}
+  .brand{font-family:'Fraunces',serif; font-weight:700; font-size:1.25rem; letter-spacing:.06em; color:var(--accent);
+    padding-left:16px; border-left:1px solid var(--line);}
+  .actions{display:flex; align-items:center; gap:10px;}
+  .btnline{width:auto; padding:9px 15px; font-size:.8rem; background:var(--panel2); color:var(--ink); border:1px solid var(--line); font-weight:500;}
+  .btnline:hover{border-color:var(--accent); color:var(--accent);}
+  .resumenBtn{width:auto; padding:9px 15px; font-size:.8rem;}
+  #resumenBox{margin:16px 28px 0; padding:16px; background:var(--panel2); border:1px solid var(--line); border-radius:10px; font-size:.85rem; white-space:pre-wrap; display:none; line-height:1.5;}
+  .stats{display:none; gap:12px; margin:18px 28px 0; flex-wrap:wrap;}
   .stats.show{display:flex;}
-  .stat{background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; min-width:96px;}
-  .stat .n{font-family:'Fraunces',serif; font-size:1.3rem; color:var(--accent);}
-  .stat .l{font-size:.68rem; color:var(--sub); margin-top:2px;}
-  .msgs{flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:8px;}
+  .stat{background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:14px 18px; min-width:110px; flex:1;
+    box-shadow:0 2px 8px rgba(0,0,0,.18);}
+  .stat .n{font-family:'Fraunces',serif; font-size:1.6rem; color:var(--accent);}
+  .stat .l{font-size:.7rem; color:var(--sub); margin-top:3px; text-transform:uppercase; letter-spacing:.03em;}
+  .msgs{flex:1; overflow-y:auto; padding:20px 28px 28px; display:flex; flex-direction:column; gap:8px;}
   .row{max-width:75%; display:flex; flex-direction:column;}
   .row.lead{align-self:flex-start;} .row.ai{align-self:flex-end;}
   .bubble{padding:9px 12px; border-radius:14px; font-size:.87rem; line-height:1.4; white-space:pre-wrap;}
   .row.lead .bubble{background:var(--lead); color:var(--ink);} .row.ai .bubble{background:var(--ai); color:var(--aitxt);}
   .placeholder{margin:auto; color:var(--sub); font-size:.85rem;}
+  .home{padding-top:4px;}
+  .home h4{font-family:'Fraunces',serif; font-size:.95rem; color:var(--sub); font-weight:500; margin:6px 0 14px; text-transform:uppercase; letter-spacing:.05em; font-size:.72rem;}
+  .home-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:14px;}
+  .leadcard{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; cursor:pointer;
+    box-shadow:0 2px 8px rgba(0,0,0,.2); transition:border-color .15s, transform .15s;}
+  .leadcard:hover{border-color:var(--accent); transform:translateY(-2px);}
+  .leadcard .lc-top{display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:8px;}
+  .leadcard .lc-name{font-weight:600; font-size:.92rem; color:var(--ink);}
+  .leadcard .lc-meta{font-family:'IBM Plex Mono',monospace; font-size:.68rem; color:var(--sub); margin-top:8px;}
+  .empty-hint{color:var(--sub); font-size:.82rem; padding:20px 0;}
 </style>
 </head>
 <body>
@@ -82,8 +99,9 @@
   <main>
     <div class="topbar">
       <h3 id="convTitle">Seleccioná un lead</h3>
-      <div style="display:flex; align-items:center; gap:16px;">
-        <button class="resumenBtn" id="resumenBtn" style="display:none;">Pedir actualización a la IA</button>
+      <div class="actions">
+        <button class="btnline" id="estadoDiaBtn" style="display:none;">Estado del día</button>
+        <button class="resumenBtn btnline" id="resumenBtn" style="display:none;">Pedir actualización a la IA</button>
         <div class="brand" id="brand">ECOM</div>
       </div>
     </div>
@@ -165,10 +183,48 @@ function renderStats(convs){
   statsEl.classList.add('show');
 }
 
+function timeAgo(iso){
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.round(diffMs / 60000);
+  if (min < 1) return 'recién';
+  if (min < 60) return `hace ${min}m`;
+  const hs = Math.round(min / 60);
+  if (hs < 24) return `hace ${hs}h`;
+  return `hace ${Math.round(hs / 24)}d`;
+}
+
+function renderHome(convs){
+  const wrap = $('msgs');
+  wrap.style.margin = ''; wrap.classList.remove('center-empty');
+  if (!convs.length) {
+    wrap.innerHTML = '<div class="placeholder">Todavía no hay leads para este profesional.</div>';
+    return;
+  }
+  const recientes = convs.slice(0, 12);
+  const cards = recientes.map(c => `
+    <div class="leadcard" data-id="${c.id}">
+      <div class="lc-top">
+        <div class="lc-name">${c.lead_nombre || c.subscriber_id}</div>
+        <span class="badge status-${c.status}">${c.status}</span>
+      </div>
+      <div class="lc-meta">${c.etapa} · score ${c.score} · ${timeAgo(c.updated_at)}</div>
+    </div>
+  `).join('');
+  wrap.innerHTML = `<div class="home"><h4>Leads recientes</h4><div class="home-grid">${cards}</div></div>`;
+  wrap.querySelectorAll('.leadcard').forEach(card => {
+    card.addEventListener('click', () => {
+      const c = convs.find(x => String(x.id) === card.dataset.id);
+      if (c) selectConv(c, document.querySelector(`#leadsWrap .item[data-id="${c.id}"]`));
+    });
+  });
+}
+
 async function selectProf(p){
   selectedProf = p; selectedConv = null;
   renderProfList();
   $('resumenBtn').style.display = 'inline-block';
+  $('estadoDiaBtn').style.display = 'inline-block';
   $('resumenBox').style.display = 'none';
   $('convTitle').textContent = p.nombre + ' — leads';
   $('brand').textContent = (p.nombre || 'ECOM').toUpperCase();
@@ -185,13 +241,14 @@ async function selectProf(p){
   (convs || []).forEach(c => {
     const div = document.createElement('div');
     div.className = 'item';
+    div.dataset.id = c.id;
     div.innerHTML = `<div>${c.lead_nombre || c.subscriber_id}</div><div class="meta"><span class="badge status-${c.status}">${c.status}</span>${c.etapa} · score ${c.score}</div>`;
     div.addEventListener('click', () => selectConv(c, div));
     leadsWrap.appendChild(div);
   });
   if (!(convs||[]).length) leadsWrap.innerHTML = '<div class="item" style="color:var(--sub);cursor:default;">Sin leads todavía</div>';
   wrap.appendChild(leadsWrap);
-  $('msgs').innerHTML = '<div class="placeholder">Elegí un lead de la lista.</div>';
+  renderHome(convs || []);
 }
 
 function parseEval(raw){
@@ -223,13 +280,13 @@ async function selectConv(c, el){
   wrap.scrollTop = wrap.scrollHeight;
 }
 
-$('resumenBtn').addEventListener('click', async () => {
+async function pedirResumen(tipo, mensajePensando){
   if (!selectedProf) return;
   $('resumenBox').style.display = 'block';
-  $('resumenBox').textContent = 'Pensando…';
+  $('resumenBox').textContent = mensajePensando;
   const { data: { session } } = await sb.auth.getSession();
   try {
-    const res = await fetch(`/api/resumen?profesional_id=${selectedProf.id}`, {
+    const res = await fetch(`/api/resumen?profesional_id=${selectedProf.id}&tipo=${tipo}`, {
       headers: { Authorization: `Bearer ${session.access_token}` }
     });
     const data = await res.json();
@@ -237,7 +294,10 @@ $('resumenBtn').addEventListener('click', async () => {
   } catch (e) {
     $('resumenBox').textContent = 'Error de conexión.';
   }
-});
+}
+
+$('resumenBtn').addEventListener('click', () => pedirResumen('general', 'Pensando…'));
+$('estadoDiaBtn').addEventListener('click', () => pedirResumen('calidad_dia', 'Analizando la calidad de los leads de hoy…'));
 
 boot();
 </script>
