@@ -58,7 +58,7 @@ async function askClaude(systemPrompt, history) {
 // URL en Manychat: https://tu-server.com/webhook/manychat/<slug-del-profesional>
 app.post("/webhook/manychat/:slug", async (req, res) => {
   try {
-    const { slug } = req.params;
+    const slug = req.params.slug.toLowerCase();
     const subscriberId = req.body.subscriber_id || req.body.id;
     const userText = req.body.last_input_text || req.body.message || "";
     const leadNombre = req.body.first_name || null;
@@ -85,6 +85,25 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
         .select().single();
       if (convErr) throw convErr;
       conv = nuevaConv;
+    }
+
+    // guarda igual el mensaje del lead para que quede en el historial, pero
+    // si la conversación ya quedó cerrada (dijo que no tiene el capital), no
+    // se le vuelve a contestar aunque siga escribiendo.
+    if (conv.status === "descartado") {
+      await supabase.from("mensajes").insert([
+        { conversacion_id: conv.id, role: "user", content: userText },
+      ]);
+      return res.json({
+        version: "v2",
+        content: { messages: [] },
+        set_fields: {
+          ai_etapa: conv.etapa, ai_status: conv.status, ai_score: conv.score,
+          ai_mostrar_resultados: false,
+          ai_oferta_presentada: conv.oferta_presentada || "",
+          ai_dia_propuesto: conv.dia_propuesto || "",
+        },
+      });
     }
 
     // traer historial de mensajes de esta conversación
@@ -227,7 +246,7 @@ app.get("/test", (_req, res) => {
   <header>
     <h1>Probador — webhook real</h1>
     <div class="row2">
-      <input id="slug" value="ignacio-ecom">
+      <input id="slug" value="ignacio-ecom" autocapitalize="off" autocorrect="off" spellcheck="false">
       <input id="subId" readonly>
       <button id="newLeadBtn" style="font-size:.72rem;">nuevo lead</button>
     </div>
@@ -277,7 +296,7 @@ async function send(){
   $('sendBtn').disabled = true;
   addBubble('lead', text);
   try{
-    const res = await fetch('/webhook/manychat/' + encodeURIComponent($('slug').value.trim()), {
+    const res = await fetch('/webhook/manychat/' + encodeURIComponent($('slug').value.trim().toLowerCase()), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subscriber_id: $('subId').value, last_input_text: text, first_name: 'Prueba' }),
