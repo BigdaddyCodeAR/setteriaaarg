@@ -26,6 +26,7 @@ function parseReply(raw) {
   const m = raw.match(/<eval>([\s\S]*?)<\/eval>/);
   let ev = {
     etapa: "inicio", status: "conversando", mostrar_resultados: false,
+    mostrar_video: false,
     oferta_presentada: null, score: 0, motivo: "", dia_propuesto: null,
   };
   if (m) { try { ev = JSON.parse(m[1]); } catch (_) {} }
@@ -146,6 +147,7 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       set_fields: {
         ai_etapa: ev.etapa, ai_status: ev.status, ai_score: ev.score,
         ai_mostrar_resultados: ev.mostrar_resultados,
+        ai_mostrar_video: ev.mostrar_video,
         ai_oferta_presentada: ev.oferta_presentada || "",
         ai_dia_propuesto: ev.dia_propuesto || "",
       },
@@ -178,11 +180,24 @@ app.get("/api/resumen", async (req, res) => {
       .from("conversaciones").select("*").eq("profesional_id", profesionalId)
       .order("updated_at", { ascending: false }).limit(200);
 
-    const resumenDatos = (conversaciones || []).map(c =>
-      `- ${c.lead_nombre || c.subscriber_id}: etapa=${c.etapa}, status=${c.status}, score=${c.score}, oferta=${c.oferta_presentada || "-"}, actualizado=${c.updated_at}`
-    ).join("\n");
+    const tipo = (req.query.tipo || "general").toString();
 
-    const prompt = `Sos un asistente que le da un update rápido y claro a un profesional sobre cómo vienen sus leads. Acá está el estado actual de sus conversaciones (una por lead):\n\n${resumenDatos || "(todavía no hay conversaciones)"}\n\nDame un resumen breve y accionable en español rioplatense: cuántos leads en total, cuántos calificados, cuántos con oferta presentada, cuántos con meet propuesto/agendado, y si hay algo que valga la pena que revise hoy.`;
+    let prompt;
+    if (tipo === "calidad_dia") {
+      const desde = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const deHoy = (conversaciones || []).filter(c => new Date(c.updated_at) >= desde);
+      const datosHoy = deHoy.map(c =>
+        `- ${c.lead_nombre || c.subscriber_id}: etapa=${c.etapa}, status=${c.status}, score=${c.score}, motivo_score=${c.motivo || "-"}, oferta=${c.oferta_presentada || "-"}, actualizado=${c.updated_at}`
+      ).join("\n");
+
+      prompt = `Sos un analista de ventas que le hace a un profesional un "estado del día": un reporte enfocado pura y exclusivamente en la CALIDAD de los leads que se movieron en las últimas 24hs, no un resumen general de números.\n\nActividad de las últimas 24hs (${deHoy.length} conversaciones con actividad):\n\n${datosHoy || "(no hubo actividad en las últimas 24hs)"}\n\nDame un reporte breve en español rioplatense, directo y accionable, que cubra:\n1. Calidad general de los leads de hoy (¿son leads con capital real y buena intención, o mayormente curiosos/sin capital?).\n2. Score promedio y qué está pesando en contra (mirá los motivos de score).\n3. Cuántos se descartaron y la razón más repetida de descarte.\n4. Cuántos llegaron a oferta o a meet, y si el ritmo es bueno o flojo.\n5. Una recomendación concreta de qué ajustar o priorizar mañana.\nSi no hubo actividad, decilo directo y no inventes datos.`;
+    } else {
+      const resumenDatos = (conversaciones || []).map(c =>
+        `- ${c.lead_nombre || c.subscriber_id}: etapa=${c.etapa}, status=${c.status}, score=${c.score}, oferta=${c.oferta_presentada || "-"}, actualizado=${c.updated_at}`
+      ).join("\n");
+
+      prompt = `Sos un asistente que le da un update rápido y claro a un profesional sobre cómo vienen sus leads. Acá está el estado actual de sus conversaciones (una por lead):\n\n${resumenDatos || "(todavía no hay conversaciones)"}\n\nDame un resumen breve y accionable en español rioplatense: cuántos leads en total, cuántos calificados, cuántos con oferta presentada, cuántos con meet propuesto/agendado, y si hay algo que valga la pena que revise hoy.`;
+    }
 
     const texto = await askClaude("Sos un analista de ventas conciso, directo, sin relleno.", [{ role: "user", content: prompt }]);
     return res.json({ resumen: texto });
