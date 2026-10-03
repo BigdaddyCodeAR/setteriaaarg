@@ -14,12 +14,69 @@ app.use(express.json());
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = "claude-sonnet-5";
+const MANYCHAT_API_KEY = process.env.MANYCHAT_API_KEY;
 
 // service_role key: SOLO se usa en el servidor, nunca se expone al navegador.
 // Ignora las políticas de seguridad (RLS) — por eso es el único que puede escribir.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// -------------------- Integración con la API de Manychat --------------------
+// Usa la "API de perfil de ámbito público" (Settings > API en Manychat).
+// No hay forma de listar/exportar todos los suscriptores (la API de Manychat
+// no lo permite) — solo se puede consultar o escribir de a un suscriptor por
+// vez, que es lo que necesitamos: enriquecer cada lead y escribir cambios
+// manuales hechos desde el dashboard de vuelta en Manychat.
+async function manychatApi(path, { method = "GET", body } = {}) {
+  if (!MANYCHAT_API_KEY) throw new Error("Falta MANYCHAT_API_KEY");
+  const res = await fetch(`https://api.manychat.com${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${MANYCHAT_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Manychat API ${path}: ${res.status} ${JSON.stringify(data)}`);
+  return data;
+}
+
+// trae nombre real y foto de perfil de Instagram de un suscriptor
+async function fetchManychatSubscriber(subscriberId) {
+  const data = await manychatApi(`/fb/subscriber/getInfo?subscriber_id=${encodeURIComponent(subscriberId)}`);
+  const s = data.data || {};
+  return {
+    nombre: [s.first_name, s.last_name].filter(Boolean).join(" ") || s.name || null,
+    foto_url: s.profile_pic || null,
+  };
+}
+
+// cache en memoria de nombre de campo -> id, para no pedirlo en cada escritura
+let camposCache = null;
+let camposCacheAt = 0;
+async function getManychatFieldId(nombreCampo) {
+  const vencido = Date.now() - camposCacheAt > 10 * 60 * 1000; // 10 min
+  if (!camposCache || vencido) {
+    const data = await manychatApi("/fb/page/getCustomFields");
+    camposCache = {};
+    (data.data || []).forEach(f => { camposCache[f.name] = f.id; });
+    camposCacheAt = Date.now();
+  }
+  return camposCache[nombreCampo] || null;
+}
+
+// escribe un custom field de vuelta en Manychat (best-effort: si falla, no
+// rompe la acción del dashboard, solo queda sin reflejar del lado de Manychat)
+async function setManychatCustomField(subscriberId, nombreCampo, valor) {
+  const fieldId = await getManychatFieldId(nombreCampo);
+  if (!fieldId) throw new Error(`No existe el custom field "${nombreCampo}" en Manychat`);
+  return manychatApi("/fb/subscriber/setCustomField", {
+    method: "POST",
+    body: { subscriber_id: subscriberId, field_id: fieldId, field_value: valor },
+  });
+}
 
 // -------------------- Llamada a Claude --------------------
 function parseReply(raw) {
@@ -46,7 +103,12 @@ async function askClaude(systemPrompt, history) {
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
       max_tokens: 500,
-      system: systemPrompt,
+      // el system_prompt de cada profesional es largo y se repite igual en
+      // cada mensaje de cada lead: lo marcamos cacheable para que Anthropic
+      // no lo vuelva a procesar entero (y cobrar entero) cada vez.
+      system: [
+        { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
+      ],
       messages: history,
     }),
   });
@@ -86,6 +148,17 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
         .select().single();
       if (convErr) throw convErr;
       conv = nuevaConv;
+
+      // best-effort: trae nombre real y foto de perfil desde Manychat para
+      // que el dashboard se vea con datos reales. Si falla (sin API key
+      // configurada, rate limit, etc.) seguimos igual con lo que mandó el
+      // webhook, no bloquea la conversación.
+      if (MANYCHAT_API_KEY) {
+        fetchManychatSubscriber(subscriberId)
+          .then(({ nombre, foto_url }) => supabase.from("conversaciones")
+            .update({ lead_nombre: nombre || conv.lead_nombre, foto_url }).eq("id", conv.id))
+          .catch(err => console.error("No se pudo enriquecer el lead desde Manychat:", err.message));
+      }
     }
 
     // guarda igual el mensaje del lead para que quede en el historial, pero
@@ -201,6 +274,47 @@ app.get("/api/resumen", async (req, res) => {
 
     const texto = await askClaude("Sos un analista de ventas conciso, directo, sin relleno.", [{ role: "user", content: prompt }]);
     return res.json({ resumen: texto });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Error interno", detail: String(err) });
+  }
+});
+
+// -------------------- Descartar un lead a mano desde el dashboard --------------------
+// Actualiza Supabase (que es la fuente de verdad: el webhook deja de
+// responder apenas status = "descartado") y, si hay API key de Manychat
+// configurada, intenta reflejar el mismo estado allá también.
+app.post("/api/lead/:id/descartar", async (req, res) => {
+  try {
+    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!token) return res.status(401).json({ error: "Falta autenticación" });
+
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !user) return res.status(401).json({ error: "Sesión inválida" });
+
+    const { data: yo } = await supabase.from("profesionales").select("*").eq("auth_user_id", user.id).single();
+    if (!yo) return res.status(403).json({ error: "No sos un profesional registrado" });
+
+    const { data: conv } = await supabase.from("conversaciones").select("*").eq("id", req.params.id).single();
+    if (!conv) return res.status(404).json({ error: "No existe ese lead" });
+    if (conv.profesional_id !== yo.id && !yo.is_admin) {
+      return res.status(403).json({ error: "No podés modificar los leads de otro profesional" });
+    }
+
+    await supabase.from("conversaciones")
+      .update({ status: "descartado", updated_at: new Date().toISOString() }).eq("id", conv.id);
+
+    let manychatOk = false;
+    if (MANYCHAT_API_KEY) {
+      try {
+        await setManychatCustomField(conv.subscriber_id, "ai_status", "descartado");
+        manychatOk = true;
+      } catch (err) {
+        console.error("No se pudo reflejar el descarte en Manychat:", err.message);
+      }
+    }
+
+    return res.json({ ok: true, manychat_actualizado: manychatOk });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Error interno", detail: String(err) });
