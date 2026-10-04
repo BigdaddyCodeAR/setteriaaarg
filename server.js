@@ -187,10 +187,6 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
 
     const history = [...(previos || []), { role: "user", content: userText }];
 
-    // espera antes de contestar (no responde apenas le escriben, como una
-    // persona real que ve el mensaje y tarda un poco en leer/escribir).
-    await sleep(5000 + Math.floor(Math.random() * 5000)); // 5 a 10 segundos
-
     const raw = await askClaude(profesional.system_prompt, history);
     const { messages, ev } = parseReply(raw);
 
@@ -206,15 +202,19 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       updated_at: new Date().toISOString(),
     }).eq("id", conv.id);
 
-    // delay entre mensajes para que no lleguen todos pegados: ~5s fijos,
-    // con una pequeña variación al azar para que no se sienta mecánico.
+    // el "delay" de cada mensaje lo interpreta Manychat del lado de ellos
+    // (no bloquea nuestra respuesta al webhook, que tiene que ser rápida).
+    // El primer mensaje lleva un poco más de aire para simular que la
+    // persona tardó en leer/escribir; los siguientes, el ritmo normal.
     return res.json({
       version: "v2",
       content: {
-        messages: messages.map(text => ({
+        messages: messages.map((text, i) => ({
           type: "text",
           text,
-          delay: 5 + Math.floor(Math.random() * 3), // 5, 6 o 7 segundos
+          delay: i === 0
+            ? 4 + Math.floor(Math.random() * 4)  // 4 a 7s el primero
+            : 2 + Math.floor(Math.random() * 3),  // 2 a 4s los siguientes
         })),
       },
       set_fields: {
