@@ -172,6 +172,9 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
         version: "v2",
         content: { messages: [] },
         set_fields: {
+          // vacío a propósito: así el flow de Manychat (gateado por
+          // "ai_mensaje no está vacío") no reenvía el último mensaje viejo.
+          ai_mensaje: "",
           ai_etapa: conv.etapa, ai_status: conv.status, ai_score: conv.score,
           ai_mostrar_resultados: false,
           ai_oferta_presentada: conv.oferta_presentada || "",
@@ -218,6 +221,11 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
         })),
       },
       set_fields: {
+        // ai_mensaje: el texto completo listo para mandar en un único
+        // mensaje de Instagram. Lo necesitamos como campo plano porque el
+        // mapeo manual de Manychat (JSONPath) no puede leer un array de
+        // mensajes — solo valores sueltos.
+        ai_mensaje: messages.join("\n\n"),
         ai_etapa: ev.etapa, ai_status: ev.status, ai_score: ev.score,
         ai_mostrar_resultados: ev.mostrar_resultados,
         ai_mostrar_video: ev.mostrar_video,
