@@ -5,6 +5,7 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 dotenv.config();
 
@@ -161,20 +162,23 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       }
     }
 
-    // guarda igual el mensaje del lead para que quede en el historial, pero
+    // guardamos el mensaje del lead apenas llega (no esperamos a tener la
+    // respuesta de la IA para guardarlo). Así, si manda dos o tres mensajes
+    // seguidos muy rápido, todos quedan en el historial antes de contestar.
+    await supabase.from("mensajes").insert([
+      { conversacion_id: conv.id, role: "user", content: userText },
+    ]);
+
+    const CAMPOS_VACIOS = { ai_mensaje: "" };
+
     // si la conversación ya quedó cerrada (dijo que no tiene el capital), no
     // se le vuelve a contestar aunque siga escribiendo.
     if (conv.status === "descartado") {
-      await supabase.from("mensajes").insert([
-        { conversacion_id: conv.id, role: "user", content: userText },
-      ]);
       return res.json({
         version: "v2",
         content: { messages: [] },
         set_fields: {
-          // vacío a propósito: así el flow de Manychat (gateado por
-          // "ai_mensaje no está vacío") no reenvía el último mensaje viejo.
-          ai_mensaje: "",
+          ...CAMPOS_VACIOS,
           ai_etapa: conv.etapa, ai_status: conv.status, ai_score: conv.score,
           ai_mostrar_resultados: false,
           ai_oferta_presentada: conv.oferta_presentada || "",
@@ -183,19 +187,55 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       });
     }
 
-    // traer historial de mensajes de esta conversación
+    // --- "esperar antes de responder" ---
+    // Si el lead manda varios mensajes seguidos muy rápido (ej: "hola" y 2
+    // segundos después "quiero info"), queremos que la IA los lea juntos y
+    // conteste una sola vez, no mensaje por mensaje. Marcamos esta solicitud
+    // como "la más nueva" con un token; si mientras esperamos llega un
+    // mensaje más nuevo de la misma persona, ese segundo webhook pisa el
+    // token y ESTA solicitud se da cuenta y no contesta nada (la que sí
+    // contesta, con todo junto, es la del mensaje más nuevo).
+    const miToken = randomUUID();
+    await supabase.from("conversaciones").update({ pending_token: miToken }).eq("id", conv.id);
+
+    await sleep(4000);
+
+    const { data: convAhora } = await supabase
+      .from("conversaciones").select("pending_token, status, etapa, score, oferta_presentada, dia_propuesto")
+      .eq("id", conv.id).single();
+
+    if (!convAhora || convAhora.pending_token !== miToken) {
+      // llegó un mensaje más nuevo mientras esperábamos: no contestamos,
+      // va a contestar la solicitud del mensaje más reciente.
+      return res.json({ version: "v2", content: { messages: [] }, set_fields: CAMPOS_VACIOS });
+    }
+
+    if (convAhora.status === "descartado") {
+      return res.json({
+        version: "v2",
+        content: { messages: [] },
+        set_fields: {
+          ...CAMPOS_VACIOS,
+          ai_etapa: convAhora.etapa, ai_status: "descartado", ai_score: convAhora.score,
+          ai_mostrar_resultados: false,
+          ai_oferta_presentada: convAhora.oferta_presentada || "",
+          ai_dia_propuesto: convAhora.dia_propuesto || "",
+        },
+      });
+    }
+
+    // traer TODO el historial (incluye los mensajes que hayan llegado
+    // mientras esperábamos, de la misma persona)
     const { data: previos } = await supabase
       .from("mensajes").select("role, content")
       .eq("conversacion_id", conv.id).order("created_at", { ascending: true });
 
-    const history = [...(previos || []), { role: "user", content: userText }];
+    const history = previos || [];
 
     const raw = await askClaude(profesional.system_prompt, history);
     const { messages, ev } = parseReply(raw);
 
-    // guardar el mensaje del lead y la respuesta cruda de la IA
     await supabase.from("mensajes").insert([
-      { conversacion_id: conv.id, role: "user", content: userText },
       { conversacion_id: conv.id, role: "assistant", content: raw },
     ]);
 
@@ -205,26 +245,13 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       updated_at: new Date().toISOString(),
     }).eq("id", conv.id);
 
-    // el "delay" de cada mensaje lo interpreta Manychat del lado de ellos
-    // (no bloquea nuestra respuesta al webhook, que tiene que ser rápida).
-    // El primer mensaje lleva un poco más de aire para simular que la
-    // persona tardó en leer/escribir; los siguientes, el ritmo normal.
+    // mandamos todo junto en un solo bloque de texto (un único campo
+    // ai_mensaje), como venía siendo — se ve más natural como mensaje de
+    // texto normal en vez de varias burbujas picadas.
     return res.json({
       version: "v2",
-      content: {
-        messages: messages.map((text, i) => ({
-          type: "text",
-          text,
-          delay: i === 0
-            ? 4 + Math.floor(Math.random() * 4)  // 4 a 7s el primero
-            : 2 + Math.floor(Math.random() * 3),  // 2 a 4s los siguientes
-        })),
-      },
+      content: { messages: [] },
       set_fields: {
-        // ai_mensaje: el texto completo listo para mandar en un único
-        // mensaje de Instagram. Lo necesitamos como campo plano porque el
-        // mapeo manual de Manychat (JSONPath) no puede leer un array de
-        // mensajes — solo valores sueltos.
         ai_mensaje: messages.join("\n\n"),
         ai_etapa: ev.etapa, ai_status: ev.status, ai_score: ev.score,
         ai_mostrar_resultados: ev.mostrar_resultados,
