@@ -169,7 +169,7 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       { conversacion_id: conv.id, role: "user", content: userText },
     ]);
 
-    const CAMPOS_VACIOS = { ai_mensaje: "" };
+    const CAMPOS_VACIOS = { ai_mensaje_1: "", ai_mensaje_2: "", ai_mensaje_3: "", ai_mensaje_4: "" };
 
     // si la conversación ya quedó cerrada (dijo que no tiene el capital), no
     // se le vuelve a contestar aunque siga escribiendo.
@@ -245,14 +245,33 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       updated_at: new Date().toISOString(),
     }).eq("id", conv.id);
 
-    // mandamos todo junto en un solo bloque de texto (un único campo
-    // ai_mensaje), como venía siendo — se ve más natural como mensaje de
-    // texto normal en vez de varias burbujas picadas.
+    // el "delay" de cada mensaje lo interpreta Manychat del lado de ellos
+    // (no bloquea nuestra respuesta al webhook, que tiene que ser rápida).
+    // El primer mensaje lleva un poco más de aire para simular que la
+    // persona tardó en leer/escribir; los siguientes, el ritmo normal.
+    //
+    // Mandamos cada mensaje en un campo separado (ai_mensaje_1, _2, _3, _4)
+    // porque el mapeo manual de Manychat no puede leer un array — solo
+    // valores sueltos. Si la IA manda más de 4 "burbujas", las que sobran
+    // se juntan en la última para no perder contenido.
+    const MAX_CAMPOS = 4;
+    const partes = messages.length > MAX_CAMPOS
+      ? [...messages.slice(0, MAX_CAMPOS - 1), messages.slice(MAX_CAMPOS - 1).join("\n\n")]
+      : messages;
+    const camposMensaje = {};
+    for (let i = 0; i < MAX_CAMPOS; i++) camposMensaje[`ai_mensaje_${i + 1}`] = partes[i] || "";
+
     return res.json({
       version: "v2",
-      content: { messages: [] },
+      content: {
+        messages: messages.map((text, i) => ({
+          type: "text",
+          text,
+          delay: 2,  // un mensaje cada 2 segundos (en Manychat se configura con un "Retraso" de 2s entre bloques)
+        })),
+      },
       set_fields: {
-        ai_mensaje: messages.join("\n\n"),
+        ...camposMensaje,
         ai_etapa: ev.etapa, ai_status: ev.status, ai_score: ev.score,
         ai_mostrar_resultados: ev.mostrar_resultados,
         ai_mostrar_video: ev.mostrar_video,
@@ -365,6 +384,13 @@ app.get("/dashboard.html", async (_req, res) => {
     .replace("__SUPABASE_URL__", process.env.SUPABASE_URL || "")
     .replace("__SUPABASE_ANON_KEY__", process.env.SUPABASE_ANON_KEY || "");
   res.type("html").send(html);
+});
+
+// Landing para chatear con el modelo de conversación como si fueras el lead.
+// Usa el webhook real (mismo prompt, mismo historial, misma espera de 4s para
+// agrupar mensajes seguidos). /chat usa ignacio-ecom; /chat/fran-ecom usa el de Fran.
+app.get(["/chat", "/chat/:slug"], async (_req, res) => {
+  res.type("html").send(await readFile("views/chat.html", "utf-8"));
 });
 
 // Probador servido por el propio servidor (evita bloqueos de red al abrir
