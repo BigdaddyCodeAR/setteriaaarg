@@ -390,7 +390,11 @@ app.get("/dashboard.html", async (_req, res) => {
 // Usa el webhook real (mismo prompt, mismo historial, misma espera de 4s para
 // agrupar mensajes seguidos). /chat usa ignacio-ecom; /chat/fran-ecom usa el de Fran.
 app.get(["/chat", "/chat/:slug"], async (_req, res) => {
-  res.type("html").send(await readFile("views/chat.html", "utf-8"));
+  try {
+    res.type("html").send(await readFile("views/chat.html", "utf-8"));
+  } catch (_) {
+    res.status(404).send("Falta subir views/chat.html al repo.");
+  }
 });
 
 // Probador servido por el propio servidor (evita bloqueos de red al abrir
