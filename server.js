@@ -169,7 +169,9 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
       { conversacion_id: conv.id, role: "user", content: userText },
     ]);
 
-    const CAMPOS_VACIOS = { ai_mensaje_1: "", ai_mensaje_2: "", ai_mensaje_3: "", ai_mensaje_4: "" };
+    // ai_mensaje (todo junto) se sigue mandando además de ai_mensaje_1..4: si en
+    // Manychat el mapeo todavía lee solo ai_mensaje, no queda con el valor viejo.
+    const CAMPOS_VACIOS = { ai_mensaje: "", ai_mensaje_1: "", ai_mensaje_2: "", ai_mensaje_3: "", ai_mensaje_4: "" };
 
     // si la conversación ya quedó cerrada (dijo que no tiene el capital), no
     // se le vuelve a contestar aunque siga escribiendo.
@@ -196,32 +198,39 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
     // token y ESTA solicitud se da cuenta y no contesta nada (la que sí
     // contesta, con todo junto, es la del mensaje más nuevo).
     const miToken = randomUUID();
-    await supabase.from("conversaciones").update({ pending_token: miToken }).eq("id", conv.id);
+    const { error: tokErr } = await supabase
+      .from("conversaciones").update({ pending_token: miToken }).eq("id", conv.id);
 
-    await sleep(4000);
+    if (tokErr) {
+      // si falta la columna pending_token (no se corrió el SQL) no nos quedamos
+      // mudos: contestamos igual, solo que sin agrupar mensajes seguidos.
+      console.error("pending_token no disponible, sigo sin agrupar mensajes:", tokErr.message);
+    } else {
+      await sleep(4000);
 
-    const { data: convAhora } = await supabase
-      .from("conversaciones").select("pending_token, status, etapa, score, oferta_presentada, dia_propuesto")
-      .eq("id", conv.id).single();
+      const { data: convAhora, error: ahoraErr } = await supabase
+        .from("conversaciones").select("pending_token, status, etapa, score, oferta_presentada, dia_propuesto")
+        .eq("id", conv.id).single();
 
-    if (!convAhora || convAhora.pending_token !== miToken) {
-      // llegó un mensaje más nuevo mientras esperábamos: no contestamos,
-      // va a contestar la solicitud del mensaje más reciente.
-      return res.json({ version: "v2", content: { messages: [] }, set_fields: CAMPOS_VACIOS });
-    }
-
-    if (convAhora.status === "descartado") {
-      return res.json({
-        version: "v2",
-        content: { messages: [] },
-        set_fields: {
-          ...CAMPOS_VACIOS,
-          ai_etapa: convAhora.etapa, ai_status: "descartado", ai_score: convAhora.score,
-          ai_mostrar_resultados: false,
-          ai_oferta_presentada: convAhora.oferta_presentada || "",
-          ai_dia_propuesto: convAhora.dia_propuesto || "",
-        },
-      });
+      if (ahoraErr || !convAhora) {
+        console.error("No pude releer la conversación, sigo igual:", ahoraErr && ahoraErr.message);
+      } else if (convAhora.pending_token !== miToken) {
+        // llegó un mensaje más nuevo mientras esperábamos: no contestamos,
+        // va a contestar la solicitud del mensaje más reciente.
+        return res.json({ version: "v2", content: { messages: [] }, set_fields: CAMPOS_VACIOS });
+      } else if (convAhora.status === "descartado") {
+        return res.json({
+          version: "v2",
+          content: { messages: [] },
+          set_fields: {
+            ...CAMPOS_VACIOS,
+            ai_etapa: convAhora.etapa, ai_status: "descartado", ai_score: convAhora.score,
+            ai_mostrar_resultados: false,
+            ai_oferta_presentada: convAhora.oferta_presentada || "",
+            ai_dia_propuesto: convAhora.dia_propuesto || "",
+          },
+        });
+      }
     }
 
     // traer TODO el historial (incluye los mensajes que hayan llegado
@@ -271,6 +280,7 @@ app.post("/webhook/manychat/:slug", async (req, res) => {
         })),
       },
       set_fields: {
+        ai_mensaje: messages.join("\n\n"),
         ...camposMensaje,
         ai_etapa: ev.etapa, ai_status: ev.status, ai_score: ev.score,
         ai_mostrar_resultados: ev.mostrar_resultados,
